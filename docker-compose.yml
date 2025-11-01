@@ -27,6 +27,8 @@ services:
       PUID: 1000
       PGID: 1000
       DANGEROUSLY_DISABLE_HOST_CHECK: 'true'
+      WDS_SOCKET_HOST: '0.0.0.0'
+      WDS_SOCKET_PORT: 4100
     volumes:
       - ./puter/config:/etc/puter
       - ./puter/data:/var/puter
