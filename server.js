@@ -3,9 +3,8 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import Redis from "ioredis";
 import crypto from "crypto";
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-require("https://js.puter.com/v2/");
+import puter from "@heyputer/puter-js";
+
 
 const app = express();
 app.use(cors());
