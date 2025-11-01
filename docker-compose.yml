@@ -9,11 +9,32 @@ services:
       - MASTER_KEY=${MASTER_KEY:-your_secure_master_key}
       - REDIS_URL=redis://redis:6379
       - PORT=3000
-      - PUTER_AUTH_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0IjoicyIsInYiOiIwLjAuMCIsInUiOiJCWndqQnRhWlM1VzJ1ZDFQM25ETlBnPT0iLCJ1dSI6Ii9vTk9IOHAwU2N5TFVSQmZQd1hGbFE9PSIsImlhdCI6MTc2MjAyNzIzNX0.66q52zfsxh9vJ4oIKqqJdgpZ2wWK7oaL9vJaMH4_egE
-      - PUTER_API_ORIGIN=https://api.puter.com
+      - PUTER_API_ORIGIN=http://puter:4100
+      - PUTER_AUTH_TOKEN=
     depends_on:
       - redis
+      - puter
     restart: unless-stopped
+
+  puter:
+    container_name: puter
+    image: ghcr.io/heyputer/puter:latest
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - '4100:4100'
+    environment:
+      PUID: 1000
+      PGID: 1000
+    volumes:
+      - ./puter/config:/etc/puter
+      - ./puter/data:/var/puter
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:4100/test || exit 1
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
