@@ -12,12 +12,15 @@ app.use(bodyParser.json({ limit: "5mb" }));
 const redis = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const MASTER_KEY = process.env.MASTER_KEY || "master_key_here";
 
-// Puter configuration - can use public puter.com or self-hosted instance
+// Puter configuration
 const PUTER_API_ORIGIN = process.env.PUTER_API_ORIGIN || "https://api.puter.com";
-const PUTER_AUTH_TOKEN = process.env.PUTER_AUTH_TOKEN || ""; // Optional: for authenticated requests
+const PUTER_AUTH_TOKEN = process.env.PUTER_AUTH_TOKEN || "";
 
 // Helper: Call Puter Driver API
-async function callPuterDriver({ interface: iface, service, method, args }) {
+async function callPuterDriver({ interface: iface, driver, method, args }) {
+  console.log(`[Puter] Calling ${PUTER_API_ORIGIN}/drivers/call`);
+  console.log(`[Puter] Driver: ${driver}, Method: ${method}`);
+  
   const response = await fetch(`${PUTER_API_ORIGIN}/drivers/call`, {
     method: "POST",
     headers: {
@@ -26,13 +29,29 @@ async function callPuterDriver({ interface: iface, service, method, args }) {
     },
     body: JSON.stringify({
       interface: iface,
-      service,
+      driver: driver,
       method,
       args
     })
   });
 
-  const data = await response.json();
+  console.log(`[Puter] Response status: ${response.status} ${response.statusText}`);
+
+  // Check if response is not OK
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[Puter] Error response: ${errorText}`);
+    throw new Error(`Puter API Error (${response.status}): ${errorText}`);
+  }
+
+  // Try to parse JSON
+  let data;
+  try {
+    data = await response.json();
+  } catch (err) {
+    const text = await response.text();
+    throw new Error(`Puter API returned non-JSON response: ${text}`);
+  }
   
   if (!data.success) {
     throw new Error(data.error?.message || "Puter driver call failed");
@@ -60,17 +79,18 @@ const formatCompletion = (text, model) => ({
   choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }]
 });
 
-// Map model names to Puter services
-const mapModelToService = (model) => {
-  const serviceMap = {
+// Map model names to Puter drivers
+const mapModelToDriver = (model) => {
+  const driverMap = {
     "claude-sonnet-4": "claude",
     "claude-opus-4": "claude",
     "claude-3-7-sonnet": "claude",
-    "gpt-4": "openai-gpt",
-    "gpt-5": "openai-gpt",
-    "gpt-3.5-turbo": "openai-gpt"
+    "gpt-4": "openai-completion",
+    "gpt-4o": "openai-completion",
+    "gpt-5": "openai-completion",
+    "gpt-3.5-turbo": "openai-completion"
   };
-  return serviceMap[model] || "claude";
+  return driverMap[model] || "claude";
 };
 
 // Chat completions
@@ -83,7 +103,7 @@ app.post("/v1/chat/completions", async (req, res) => {
   const fullMessages = [...history, ...messages];
 
   try {
-    const service = mapModelToService(model);
+    const driver = mapModelToDriver(model);
     const driverArgs = {
       messages: fullMessages,
       model: model,
@@ -91,15 +111,13 @@ app.post("/v1/chat/completions", async (req, res) => {
     };
 
     if (stream) {
-      // Note: Streaming via HTTP fetch is more complex and may not work directly
-      // You might need to implement SSE handling differently
       res.status(501).json({ 
         error: "Streaming not yet implemented for Puter driver API. Use stream: false" 
       });
     } else {
       const result = await callPuterDriver({
         interface: "puter-chat-completion",
-        service: service,
+        driver: driver,
         method: "complete",
         args: driverArgs
       });
@@ -121,10 +139,10 @@ app.post("/v1/edits", async (req, res) => {
   const { input = "", instruction = "", model = "claude-sonnet-4" } = req.body;
   
   try {
-    const service = mapModelToService(model);
+    const driver = mapModelToDriver(model);
     const result = await callPuterDriver({
       interface: "puter-chat-completion",
-      service: service,
+      driver: driver,
       method: "complete",
       args: {
         messages: [{
