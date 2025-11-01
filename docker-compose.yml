@@ -26,6 +26,7 @@ services:
     environment:
       PUID: 1000
       PGID: 1000
+      DANGEROUSLY_DISABLE_HOST_CHECK: 'true'
     volumes:
       - ./puter/config:/etc/puter
       - ./puter/data:/var/puter
