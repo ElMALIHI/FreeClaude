@@ -29,6 +29,8 @@ services:
       DANGEROUSLY_DISABLE_HOST_CHECK: 'true'
       WDS_SOCKET_HOST: '0.0.0.0'
       WDS_SOCKET_PORT: 4100
+      HOST: '0.0.0.0'
+      WEBPACK_DEV_SERVER_ALLOWED_HOSTS: 'all'
     volumes:
       - ./puter/config:/etc/puter
       - ./puter/data:/var/puter

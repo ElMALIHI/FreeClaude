@@ -3,7 +3,7 @@
   "pub_port": 4100,
   "domain": "puter.localhost",
   "experimental_no_subdomain": true,
-  "server": {
-    "allowedHosts": "all"
+  "hosting": {
+    "domain": "0.0.0.0"
   }
 }
