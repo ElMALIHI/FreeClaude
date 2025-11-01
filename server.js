@@ -3,15 +3,43 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import Redis from "ioredis";
 import crypto from "crypto";
-import puter from "@heyputer/puter-js";
-
+import fetch from "node-fetch";
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: "5mb" }));
 
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+const redis = new Redis(process.env.REDIS_URL || "redis://redis:6379");
 const MASTER_KEY = process.env.MASTER_KEY || "master_key_here";
+
+// Puter configuration - can use public puter.com or self-hosted instance
+const PUTER_API_ORIGIN = process.env.PUTER_API_ORIGIN || "https://api.puter.com";
+const PUTER_AUTH_TOKEN = process.env.PUTER_AUTH_TOKEN || ""; // Optional: for authenticated requests
+
+// Helper: Call Puter Driver API
+async function callPuterDriver({ interface: iface, service, method, args }) {
+  const response = await fetch(`${PUTER_API_ORIGIN}/drivers/call`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(PUTER_AUTH_TOKEN ? { "Authorization": `Bearer ${PUTER_AUTH_TOKEN}` } : {})
+    },
+    body: JSON.stringify({
+      interface: iface,
+      service,
+      method,
+      args
+    })
+  });
+
+  const data = await response.json();
+  
+  if (!data.success) {
+    throw new Error(data.error?.message || "Puter driver call failed");
+  }
+  
+  return data.result;
+}
 
 // API Key Middleware
 app.use(async (req, res, next) => {
@@ -32,48 +60,58 @@ const formatCompletion = (text, model) => ({
   choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }]
 });
 
+// Map model names to Puter services
+const mapModelToService = (model) => {
+  const serviceMap = {
+    "claude-sonnet-4": "claude",
+    "claude-opus-4": "claude",
+    "claude-3-7-sonnet": "claude",
+    "gpt-4": "openai-gpt",
+    "gpt-5": "openai-gpt",
+    "gpt-3.5-turbo": "openai-gpt"
+  };
+  return serviceMap[model] || "claude";
+};
+
 // Chat completions
 app.post("/v1/chat/completions", async (req, res) => {
-  const { messages = [], model = "claude-sonnet-4", stream = false, functions = [], conversation_id } = req.body;
+  const { messages = [], model = "claude-sonnet-4", stream = false, conversation_id } = req.body;
   if (!conversation_id) return res.status(400).json({ error: "conversation_id required" });
 
   const historyJson = await redis.get(conversation_id);
   const history = historyJson ? JSON.parse(historyJson) : [];
   const fullMessages = [...history, ...messages];
 
-  let prompt = fullMessages.map(m => `${m.role}: ${m.content}`).join("\n");
-  if (functions.length > 0) {
-    prompt += "\n\nInstructions: respond in JSON matching one of these functions: " +
-      JSON.stringify(functions.map(f => ({ name: f.name, parameters: f.parameters })));
-  }
-
   try {
-    if (stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.flushHeaders();
+    const service = mapModelToService(model);
+    const driverArgs = {
+      messages: fullMessages,
+      model: model,
+      temperature: req.body.temperature || 1.0
+    };
 
-      const response = await puter.ai.chat(prompt, { model, stream: true });
-      for await (const part of response) {
-        const text = part?.text || "";
-        if (text) res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + Math.random().toString(36).slice(2), object: "chat.completion.chunk", choices: [{ delta: { content: text }, index: 0, finish_reason: null }] })}\n\n`);
-      }
-      res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + Math.random().toString(36).slice(2), object: "chat.completion.chunk", choices: [{ delta: {}, index: 0, finish_reason: "stop" }] })}\n\n`);
-      res.end();
+    if (stream) {
+      // Note: Streaming via HTTP fetch is more complex and may not work directly
+      // You might need to implement SSE handling differently
+      res.status(501).json({ 
+        error: "Streaming not yet implemented for Puter driver API. Use stream: false" 
+      });
     } else {
-      const response = await puter.ai.chat(prompt, { model });
-      const newHistory = fullMessages.concat([{ role: "assistant", content: response.message?.content?.[0]?.text || "" }]);
+      const result = await callPuterDriver({
+        interface: "puter-chat-completion",
+        service: service,
+        method: "complete",
+        args: driverArgs
+      });
+
+      const assistantMessage = result.message?.content || result.text || "";
+      const newHistory = fullMessages.concat([{ role: "assistant", content: assistantMessage }]);
       await redis.set(conversation_id, JSON.stringify(newHistory), "EX", 60 * 60 * 24);
 
-      let content = response.message?.content?.[0]?.text || "";
-      if (functions.length > 0) {
-        try { content = JSON.parse(content); } catch {};
-      }
-      res.json(formatCompletion(content, model));
+      res.json(formatCompletion(assistantMessage, model));
     }
   } catch (err) {
-    console.error(err);
+    console.error("Puter API Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -81,25 +119,39 @@ app.post("/v1/chat/completions", async (req, res) => {
 // Edits endpoint
 app.post("/v1/edits", async (req, res) => {
   const { input = "", instruction = "", model = "claude-sonnet-4" } = req.body;
-  const prompt = `Edit the following text based on the instruction:\nText: ${input}\nInstruction: ${instruction}`;
+  
   try {
-    const response = await puter.ai.chat(prompt, { model });
-    res.json({ object: "edit", created: Date.now(), choices: [{ text: response.message?.content?.[0]?.text || "", index: 0 }] });
+    const service = mapModelToService(model);
+    const result = await callPuterDriver({
+      interface: "puter-chat-completion",
+      service: service,
+      method: "complete",
+      args: {
+        messages: [{
+          role: "user",
+          content: `Edit the following text based on the instruction:\n\nText: ${input}\n\nInstruction: ${instruction}`
+        }],
+        model: model
+      }
+    });
+
+    const editedText = result.message?.content || result.text || "";
+    res.json({
+      object: "edit",
+      created: Date.now(),
+      choices: [{ text: editedText, index: 0 }]
+    });
   } catch (err) {
+    console.error("Puter API Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Embeddings endpoint
+// Embeddings endpoint  
 app.post("/v1/embeddings", async (req, res) => {
-  const { input = "", model = "claude-3-7-sonnet" } = req.body;
-  try {
-    const response = await puter.ai.chat(`Generate a numeric vector embedding for: "${input}"`, { model });
-    const embedding = response.message?.content?.[0]?.text.split(",").map(Number) || [];
-    res.json({ object: "embedding", data: [{ embedding, index: 0 }], model });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.status(501).json({
+    error: "Embeddings are not directly supported via Puter driver API"
+  });
 });
 
 // Admin API key generation
@@ -111,5 +163,13 @@ app.post("/v1/admin/generate_key", async (req, res) => {
   res.json({ api_key: newKey });
 });
 
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "healthy", puter_api: PUTER_API_ORIGIN });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Claude OpenAI wrapper running at http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Claude OpenAI wrapper running at http://localhost:${PORT}`);
+  console.log(`📡 Using Puter API at: ${PUTER_API_ORIGIN}`);
+});

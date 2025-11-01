@@ -9,6 +9,8 @@ services:
       - MASTER_KEY=${MASTER_KEY:-your_secure_master_key}
       - REDIS_URL=redis://redis:6379
       - PORT=3000
+      - PUTER_AUTH_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0IjoicyIsInYiOiIwLjAuMCIsInUiOiJCWndqQnRhWlM1VzJ1ZDFQM25ETlBnPT0iLCJ1dSI6Ii9vTk9IOHAwU2N5TFVSQmZQd1hGbFE9PSIsImlhdCI6MTc2MjAyNzIzNX0.66q52zfsxh9vJ4oIKqqJdgpZ2wWK7oaL9vJaMH4_egE
+      - PUTER_API_ORIGIN=https://api.puter.com
     depends_on:
       - redis
     restart: unless-stopped
